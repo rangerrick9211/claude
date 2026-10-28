@@ -4,14 +4,14 @@ import Foundation
 enum Route: Equatable {
     /// Artifact pages, claude.ai sign-in, and the sign-in providers it sends you through.
     case stay
-    /// Any other claude.ai page, like a chat. A tap opens it in the Claude app; the redirect
-    /// claude.ai does after sign-in sends the tab back to its own page instead.
+    /// Any other claude.ai page. A tap opens it in the Claude app. Landing on a chat after
+    /// sign-in sends the tab back to its own page (see `isClaudeLanding`); anything else loads.
     case otherClaudePage
     /// Everything else: Strava, Walmart, Etsy, mail and phone links.
     case outside
 
     init(_ url: URL) {
-        switch url.scheme?.lowercased() {
+        switch url.scheme?.lowercased() ?? "" {
         case "about", "blob", "data", "file":
             self = .stay
             return
@@ -33,6 +33,12 @@ enum Route: Equatable {
         }
     }
 
+    /// The claude.ai pages it drops you on after sign-in: home, a new chat, recents, a chat, a project.
+    static func isClaudeLanding(_ url: URL) -> Bool {
+        let path = url.path.lowercased()
+        return ["", "/", "/new", "/recents"].contains(path) || path.hasPrefix("/chat/") || path.hasPrefix("/project/")
+    }
+
     private static let claudePaths = [
         "/artifact", "/code/artifact",
         "/login", "/logout", "/magic-link", "/auth", "/oauth", "/sso", "/onboarding", "/verify",
@@ -41,7 +47,7 @@ enum Route: Equatable {
 
     private static let signInHosts = [
         "claudeusercontent.com",
-        "accounts.google.com", "accounts.youtube.com",
+        "accounts.google.com", "accounts.youtube.com", "gds.google.com",
         "appleid.apple.com", "idmsa.apple.com",
         "challenges.cloudflare.com",
     ]

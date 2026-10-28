@@ -22,7 +22,7 @@ final class TabStore: ObservableObject {
             tab.didReturnHome = { [weak self, weak tab] in
                 guard let self else { return }
                 for other in self.tabs.values where other !== tab && other.hasStarted {
-                    other.goHome()
+                    other.refreshAfterSignIn()
                 }
             }
         }
@@ -71,8 +71,10 @@ final class WebTab: NSObject, ObservableObject {
 
     private(set) var hasStarted = false
     private var lastReturnHome: Date?
+    private var wasAway = false
+    private var urlWatch: AnyCancellable?
     var openDestination: ((Destination) -> Void)?
-    /// Called after claude.ai's post-sign-in redirect, so the other tabs can pick up the sign-in.
+    /// Called when this tab gets back to its page after signing in, so the other tabs can catch up.
     var didReturnHome: (() -> Void)?
 
     init(destination: Destination) {
@@ -91,6 +93,9 @@ final class WebTab: NSObject, ObservableObject {
         webView.isInspectable = true
         webView.publisher(for: \.estimatedProgress).assign(to: &$progress)
         webView.publisher(for: \.isLoading).assign(to: &$isLoading)
+        urlWatch = webView.publisher(for: \.url).sink { [weak self] url in
+            if let url { self?.urlChanged(url) }
+        }
     }
 
     /// WKWebView leaves "Version/… Safari/…" off its user agent, and Google won't sign in a page it
@@ -127,6 +132,28 @@ final class WebTab: NSObject, ObservableObject {
         }
     }
 
+    /// Reloads this tab's page after another tab signed in, without passing the news on again.
+    func refreshAfterSignIn() {
+        wasAway = false
+        goHome()
+    }
+
+    /// claude.ai lands on a chat after you sign in. Sends the tab back to its own page, unless it
+    /// just did that (claude.ai redirecting in a loop), in which case it returns false and stays put.
+    private func returnHome() -> Bool {
+        if let last = lastReturnHome, Date.now.timeIntervalSince(last) < 15 { return false }
+        lastReturnHome = .now
+        Task { goHome() }
+        return true
+    }
+
+    /// claude.ai changes pages inside its web app without a full load, and those changes skip the
+    /// link rules below. This catches the after-sign-in landing anyway.
+    private func urlChanged(_ url: URL) {
+        guard Route(url) == .otherClaudePage, Route.isClaudeLanding(url) else { return }
+        _ = returnHome()
+    }
+
     private func openOutside(_ url: URL) {
         UIApplication.shared.open(url)
     }
@@ -159,7 +186,12 @@ extension WebTab: WKNavigationDelegate {
         guard let url = navigationAction.request.url else { return decisionHandler(.cancel) }
 
         // The artifact itself runs in a frame on claudeusercontent.com; claude.ai manages that frame.
+        // A tapped link in it that leads off claude.ai still goes to Safari.
         if let frame = navigationAction.targetFrame, !frame.isMainFrame {
+            if navigationAction.navigationType == .linkActivated && Route(url) != .stay {
+                openOutside(url)
+                return decisionHandler(.cancel)
+            }
             return decisionHandler(.allow)
         }
 
@@ -167,8 +199,12 @@ extension WebTab: WKNavigationDelegate {
         if let target = Destination(matching: url) {
             // This tab's own page (or claude.ai reloading it) loads here; another tab's page switches tabs.
             if target == destination && !isPopup { return decisionHandler(.allow) }
-            if isPopup { closePopup() }
-            if target == destination { Task { goHome() } } else { openDestination?(target) }
+            if isPopup {
+                // A sign-in window finishing on one of the pages: everything can reload signed in.
+                closePopup()
+                didReturnHome?()
+            }
+            if target == destination { Task { refreshAfterSignIn() } } else { openDestination?(target) }
             return decisionHandler(.cancel)
         }
 
@@ -180,17 +216,10 @@ extension WebTab: WKNavigationDelegate {
             if isPopup { closePopup() }
             decisionHandler(.cancel)
         case .otherClaudePage:
-            // claude.ai lands on a new chat after you sign in. Come back to this tab's page instead,
-            // but if claude.ai keeps redirecting (a sign-in step this app doesn't know), let it through.
-            if let last = lastReturnHome, Date.now.timeIntervalSince(last) < 15 {
-                return decisionHandler(.allow)
-            }
-            lastReturnHome = .now
+            // Sign-in steps can pass through claude.ai pages this app doesn't know; only the
+            // chat it lands on afterwards sends the tab back to its own page.
+            guard Route.isClaudeLanding(url), returnHome() else { return decisionHandler(.allow) }
             if isPopup { closePopup() }
-            Task {
-                goHome()
-                didReturnHome?()
-            }
             decisionHandler(.cancel)
         case .outside:
             openOutside(url)
@@ -200,7 +229,19 @@ extension WebTab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        if webView === self.webView { failure = nil }
+        guard webView === self.webView, let url = webView.url else { return }
+        failure = nil
+        if !url.isFileURL { showingOfflineCopy = false }
+        // Back on this tab's page after a detour (the claude.ai sign-in): the other tabs can reload
+        // signed in too.
+        if Destination(matching: url) == destination {
+            if wasAway {
+                wasAway = false
+                didReturnHome?()
+            }
+        } else if url.scheme?.hasPrefix("http") == true {
+            wasAway = true
+        }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -245,8 +286,11 @@ extension WebTab: WKUIDelegate {
         return child
     }
 
+    /// A sign-in window closes itself when it's done.
     func webViewDidClose(_ webView: WKWebView) {
-        if webView === popup?.webView { closePopup() }
+        guard webView === popup?.webView else { return }
+        closePopup()
+        didReturnHome?()
     }
 
     func webView(
@@ -257,7 +301,7 @@ extension WebTab: WKUIDelegate {
     ) {
         let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler() })
-        present(alert, otherwise: completionHandler)
+        present(alert, over: webView, otherwise: completionHandler)
     }
 
     func webView(
@@ -269,16 +313,18 @@ extension WebTab: WKUIDelegate {
         let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(false) })
         alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler(true) })
-        present(alert, otherwise: { completionHandler(false) })
+        present(alert, over: webView, otherwise: { completionHandler(false) })
     }
 
-    private func present(_ alert: UIAlertController, otherwise: () -> Void) {
-        let window = UIApplication.shared.connectedScenes
+    private func present(_ alert: UIAlertController, over webView: WKWebView, otherwise: () -> Void) {
+        let keyWindow = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows)
             .first(where: \.isKeyWindow)
-        guard var top = window?.rootViewController else { return otherwise() }
-        while let presented = top.presentedViewController { top = presented }
+        guard var top = (webView.window ?? keyWindow)?.rootViewController else { return otherwise() }
+        while let presented = top.presentedViewController, !presented.isBeingDismissed { top = presented }
         top.present(alert, animated: true)
+        // WebKit throws if a panel's handler is never called, so answer for it if the alert didn't show.
+        if alert.presentingViewController == nil { otherwise() }
     }
 }

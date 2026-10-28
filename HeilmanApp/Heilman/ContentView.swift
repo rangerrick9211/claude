@@ -11,7 +11,7 @@ struct ContentView: View {
                 // All three pages stay in place; switching tabs only changes which one shows.
                 ForEach(Destination.allCases) { destination in
                     let isShown = store.selection == destination
-                    WebPage(tab: store.tab(destination))
+                    TabPage(tab: store.tab(destination))
                         .opacity(isShown ? 1 : 0)
                         .allowsHitTesting(isShown)
                         .accessibilityHidden(!isShown)
@@ -89,7 +89,7 @@ private struct TopBar: View {
     }
 }
 
-private struct WebPage: View {
+private struct TabPage: View {
     @ObservedObject var tab: WebTab
 
     var body: some View {
