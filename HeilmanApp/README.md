@@ -24,6 +24,29 @@ This lets you install the app from the TestFlight app like any other app, and ad
 
 TestFlight builds stop working after 90 days. Archive and upload again before then.
 
+## Build from your phone (no Mac)
+
+GitHub can build the app on its own Macs and upload it to TestFlight. The workflow is `.github/workflows/testflight.yml`. Setup is one time.
+
+1. **Make an API key.** In [App Store Connect](https://appstoreconnect.apple.com) go to **Users and Access → Integrations → App Store Connect API → Team Keys** and tap **+**. (The first time, you accept the API terms with **Request Access**.) Name it "GitHub", set access to **Admin**, and generate it.
+   - Note the **Issuer ID** at the top of the page and the key's **Key ID**.
+   - Tap **Download**. Apple only lets you download it once. It lands in **Files → Downloads** as `AuthKey_….p8`.
+2. **Copy the key's text.** In Files, press and hold the key file, **Rename** it to end in `.txt`, then open it, select all and copy. If iOS won't let you select the text, open it in Pages and copy from there.
+3. **Find your Team ID.** It's on [developer.apple.com/account](https://developer.apple.com/account) under **Membership details**.
+4. **Add four secrets on GitHub.** Open this repository, then **Settings → Secrets and variables → Actions → New repository secret** (if Settings is missing on your phone, turn on **Request Desktop Website** in Safari):
+   | Name | Value |
+   |---|---|
+   | `ASC_ISSUER_ID` | the Issuer ID |
+   | `ASC_KEY_ID` | the Key ID |
+   | `ASC_KEY_P8` | the key text you copied |
+   | `APPLE_TEAM_ID` | the Team ID |
+5. **Run it.** Go to **Actions → TestFlight → Run workflow**. The first run registers the app's bundle ID with Apple and stops, asking you to create the app in App Store Connect (**Apps → + → New App**, pick that bundle ID). Then run it again. A build takes about 10 to 15 minutes.
+6. **Install.** In App Store Connect, add yourself under **TestFlight → Internal Testing**, then install from the TestFlight app.
+
+After that it builds by itself whenever the app's code changes on the default branch, and on the 1st of every other month so the TestFlight build never expires. You can also tap **Run workflow** any time.
+
+Builds made this way don't include the offline Almanac copy (it's not in git), so the Almanac tab needs a connection.
+
 ## How it works
 
 - The tab switcher is at the top, because Basecamp and the Family App draw their own tab bars at the bottom.
@@ -41,7 +64,7 @@ If Google still refuses, use the email option. Tapping the emailed link opens Sa
 
 ## The offline Almanac
 
-`Heilman/almanac.html` is the copy the Almanac tab shows when there's no connection. It's left out of git because it holds Strava GPS traces and family dates, and this repository is public. Without the file the app still builds, and the Almanac tab just needs a connection.
+`Heilman/almanac.html` is the copy the Almanac tab shows when there's no connection. It's left out of git because it holds Strava GPS traces and family dates, and this repository is public. Without the file the app still builds (cloud builds never have it), and the Almanac tab just needs a connection.
 
 To refresh it, ask Claude for the current Almanac page saved as `almanac.html`, drop it into the `Heilman` folder, and archive a new build.
 

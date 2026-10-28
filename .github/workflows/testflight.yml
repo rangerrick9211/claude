@@ -1,0 +1,139 @@
+# Builds the Heilman iPhone app on GitHub's Macs and uploads it to TestFlight.
+# Run it by hand from a phone: github.com → this repo → Actions → TestFlight → Run workflow.
+# Setup (four repository secrets) is in HeilmanApp/README.md.
+name: TestFlight
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "HeilmanApp/**"
+      - ".github/workflows/testflight.yml"
+      - ".github/scripts/asc.py"
+      - ".github/ExportOptions.plist"
+  schedule:
+    # The 1st of every other month, so a TestFlight build is never close to its 90-day expiry.
+    - cron: "23 17 1 */2 *"
+
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+env:
+  # Overrides PRODUCT_BUNDLE_IDENTIFIER in the Xcode project for these builds.
+  BUNDLE_ID: com.travisheilman.heilman
+  APP_NAME: Heilman
+  ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+  ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+  ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+  APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+jobs:
+  preflight:
+    # Pushes only build from the default branch.
+    if: github.event_name != 'push' || github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.secrets.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the four secrets are set
+        id: secrets
+        run: |
+          missing=""
+          for name in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8 APPLE_TEAM_ID; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -z "$missing" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            # Before setup is done, a push just skips the build.
+            echo "::notice::Skipping the TestFlight build until these secrets are set:$missing"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Add these repository secrets first (Settings → Secrets and variables → Actions):$missing"
+            exit 1
+          fi
+
+      - name: Set up the App Store Connect helper
+        if: steps.secrets.outputs.ready == 'true'
+        run: python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install --quiet "pyjwt[crypto]==2.9.0"
+
+      - name: Register the bundle ID and check the app exists
+        if: steps.secrets.outputs.ready == 'true'
+        run: '"$RUNNER_TEMP/venv/bin/python" .github/scripts/asc.py preflight'
+
+  build:
+    needs: preflight
+    if: needs.preflight.outputs.ready == 'true'
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare
+        run: |
+          xcodebuild -version
+          python3 .github/scripts/asc.py write-key "$RUNNER_TEMP/AuthKey.p8"
+          cp .github/ExportOptions.plist "$RUNNER_TEMP/ExportOptions.plist"
+          plutil -insert teamID -string "$APPLE_TEAM_ID" "$RUNNER_TEMP/ExportOptions.plist"
+          {
+            echo "KEY_PATH=$RUNNER_TEMP/AuthKey.p8"
+            echo "BUILD_NUMBER=${{ github.run_number }}.${{ github.run_attempt }}"
+          } >> "$GITHUB_ENV"
+
+      # Archive without signing, then let Apple's cloud-managed distribution certificate sign it during
+      # the upload. Signing the archive itself would make Xcode create a new development certificate on
+      # every one of these throwaway Macs, until Apple's limit is hit.
+      - name: Archive
+        run: |
+          xcodebuild archive \
+            -project HeilmanApp/Heilman.xcodeproj -scheme Heilman -configuration Release \
+            -destination generic/platform=iOS -archivePath "$RUNNER_TEMP/Heilman.xcarchive" \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGNING_ALLOWED=NO
+
+      - name: Sign and upload to TestFlight
+        id: upload
+        continue-on-error: true
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Heilman.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates -authenticationKeyPath "$KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      # Fallback if Xcode won't sign the unsigned archive: archive with signing on, then revoke the
+      # development certificate Xcode creates for this Mac.
+      - name: "Fallback: set up the App Store Connect helper"
+        if: steps.upload.outcome == 'failure'
+        run: python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install --quiet "pyjwt[crypto]==2.9.0"
+
+      - name: "Fallback: note the existing development certificates"
+        if: steps.upload.outcome == 'failure'
+        run: '"$RUNNER_TEMP/venv/bin/python" .github/scripts/asc.py dev-certs "$RUNNER_TEMP/dev-certs-before.txt"'
+
+      - name: "Fallback: archive signed, then sign and upload"
+        if: steps.upload.outcome == 'failure'
+        run: |
+          xcodebuild archive \
+            -project HeilmanApp/Heilman.xcodeproj -scheme Heilman -configuration Release \
+            -destination generic/platform=iOS -archivePath "$RUNNER_TEMP/Heilman-signed.xcarchive" \
+            -allowProvisioningUpdates -authenticationKeyPath "$KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Automatic
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Heilman-signed.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export-signed" \
+            -allowProvisioningUpdates -authenticationKeyPath "$KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      - name: "Fallback: revoke the development certificate this run created"
+        if: always() && steps.upload.outcome == 'failure'
+        run: '"$RUNNER_TEMP/venv/bin/python" .github/scripts/asc.py revoke-new-dev-certs "$RUNNER_TEMP/dev-certs-before.txt"'
+
+      - name: Report
+        run: |
+          echo "Build $BUILD_NUMBER is uploaded. Apple takes about 10 to 30 minutes to process it, then it shows up in the TestFlight app." >> "$GITHUB_STEP_SUMMARY"
