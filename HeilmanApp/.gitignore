@@ -1,0 +1,9 @@
+xcuserdata/
+DerivedData/
+build/
+*.xcuserstate
+.DS_Store
+
+# The Almanac's offline copy holds Strava GPS traces and family dates, and this repo is public.
+# It still goes into the app; see README.
+Heilman/almanac.html
