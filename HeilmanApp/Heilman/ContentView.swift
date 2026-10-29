@@ -8,7 +8,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             TopBar()
             ZStack {
-                // All three pages stay in place; switching tabs only changes which one shows.
+                // Both pages stay in place; switching tabs only changes which one shows.
                 ForEach(Destination.allCases) { destination in
                     let isShown = store.selection == destination
                     TabPage(tab: store.tab(destination))
@@ -23,8 +23,8 @@ struct ContentView: View {
     }
 }
 
-/// The tab switcher. It sits at the top because Basecamp and the Family App draw their own
-/// tab bars at the bottom of the page.
+/// The tab switcher. It sits at the top because Basecamp draws its own tab bar at the bottom
+/// of the page.
 private struct TopBar: View {
     @EnvironmentObject private var store: TabStore
     @State private var confirmingSignOut = false
@@ -75,7 +75,7 @@ private struct TopBar: View {
                 Task { await store.signOut() }
             }
         } message: {
-            Text("All three tabs go back to the claude.ai sign-in.")
+            Text("Both tabs go back to the claude.ai sign-in.")
         }
     }
 

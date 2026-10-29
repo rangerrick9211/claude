@@ -1,16 +1,16 @@
 import SwiftUI
 
-/// The three pages behind the tabs. Each one is a live Claude artifact, so the app shows the same
-/// data as claude.ai, and Claude's routines keep updating it.
+/// The pages behind the tabs. Each one is a live Claude artifact, so the app shows the same
+/// data as claude.ai, and Claude's routines keep updating it. The Family App is Basecamp's
+/// Family page, so it doesn't get a tab of its own.
 enum Destination: String, CaseIterable, Identifiable {
-    case basecamp, family, almanac
+    case basecamp, almanac
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .basecamp: "Basecamp"
-        case .family: "Family"
         case .almanac: "Almanac"
         }
     }
@@ -18,13 +18,12 @@ enum Destination: String, CaseIterable, Identifiable {
     var url: URL {
         switch self {
         case .basecamp: URL(string: "https://claude.ai/artifact/RAnDhxPeuq9rXSrM6mLak6")!
-        case .family: URL(string: "https://claude.ai/artifact/WZQrttc8LVtAQuwCTs2CAN")!
         case .almanac: URL(string: "https://claude.ai/artifact/GLqU8sjSXuLRpCQocqxgK4")!
         }
     }
 
     /// A copy built into the app, shown when the live page can't load. Only the Almanac has one:
-    /// it's a static page, while Basecamp and Family need Claude for their data.
+    /// it's a static page, while Basecamp needs Claude for its data.
     /// The file is optional and kept out of git (see README).
     var offlineCopy: URL? {
         switch self {
@@ -37,7 +36,6 @@ enum Destination: String, CaseIterable, Identifiable {
     var edgeColor: Color {
         switch self {
         case .basecamp: Color(hex: 0xFBF8F2)
-        case .family: Color(hex: 0xF7F4ED)
         case .almanac: Color(hex: 0xF1ECE3)
         }
     }

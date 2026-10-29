@@ -2,7 +2,7 @@ import Combine
 import SwiftUI
 import WebKit
 
-/// Holds the three tabs. Their web views stay alive while you switch, so nothing reloads.
+/// Holds the tabs. Their web views stay alive while you switch, so nothing reloads.
 @MainActor
 final class TabStore: ObservableObject {
     @Published var selection: Destination {
@@ -34,7 +34,7 @@ final class TabStore: ObservableObject {
 
     func start() {
         current.loadIfNeeded()
-        // Load the other two a moment later, so the first switch to them is instant.
+        // Load the other tab a moment later, so the first switch to it is instant.
         Task {
             try? await Task.sleep(for: .seconds(2))
             for destination in Destination.allCases { tab(destination).loadIfNeeded() }
@@ -80,7 +80,7 @@ final class WebTab: NSObject, ObservableObject {
     init(destination: Destination) {
         self.destination = destination
         let configuration = WKWebViewConfiguration()
-        // One shared store, so signing in on one tab signs in all three, and it lasts between launches.
+        // One shared store, so signing in on one tab signs in both, and it lasts between launches.
         configuration.websiteDataStore = .default()
         configuration.allowsInlineMediaPlayback = true
         configuration.applicationNameForUserAgent = Self.safariUserAgentSuffix

@@ -17,7 +17,7 @@ private struct RootView: View {
     var body: some View {
         ContentView()
             .environmentObject(store)
-            // Basecamp and the Family App are light-only, so the app chrome is too.
+            // Basecamp is light-only, so the app chrome is too.
             .preferredColorScheme(.light)
     }
 }
